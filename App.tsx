@@ -5,8 +5,20 @@
  * @format
  */
 
+import { useEffect, useState } from 'react';
 import { NewAppScreen } from '@react-native/new-app-screen';
-import { StatusBar, StyleSheet, useColorScheme, View } from 'react-native';
+import {
+  StatusBar,
+  StyleSheet,
+  useColorScheme,
+  View,
+  NativeModules,
+  Text,
+} from 'react-native';
+import RNBootSplash from 'react-native-bootsplash';
+
+console.log(NativeModules.Channel);
+
 import {
   SafeAreaProvider,
   useSafeAreaInsets,
@@ -14,6 +26,11 @@ import {
 
 function App() {
   const isDarkMode = useColorScheme() === 'dark';
+
+  // ✅ HIDE SPLASH HERE (IMPORTANT)
+  useEffect(() => {
+    RNBootSplash.hide({ fade: true });
+  }, []);
 
   return (
     <SafeAreaProvider>
@@ -25,9 +42,34 @@ function App() {
 
 function AppContent() {
   const safeAreaInsets = useSafeAreaInsets();
+  const [channel, setChannel] = useState<string>('loading...');
+
+  useEffect(() => {
+    async function loadChannel() {
+      try {
+        const ch = await NativeModules.Channel.getChannel();
+        setChannel(ch);
+      } catch {
+        setChannel('error');
+      }
+    }
+    loadChannel();
+  }, []);
 
   return (
-    <View style={styles.container}>
+    <View
+      style={[
+        styles.container,
+        {
+          paddingTop: safeAreaInsets.top,
+          paddingBottom: safeAreaInsets.bottom,
+          paddingLeft: safeAreaInsets.left,
+          paddingRight: safeAreaInsets.right,
+        },
+      ]}
+    >
+      <Text style={styles.channelText}>{channel}</Text>
+
       <NewAppScreen
         templateFileName="App.tsx"
         safeAreaInsets={safeAreaInsets}
@@ -39,6 +81,11 @@ function AppContent() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  channelText: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 12,
   },
 });
 
