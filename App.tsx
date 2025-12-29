@@ -88,7 +88,32 @@ function App() {
         />
       )}
 
-    
+      {/* ================= Startup loading ================= */}
+      {!store.ads.base64 && loading && (
+        <StartupLoadingScreen
+          loading={loading}
+          devModeEnabled
+          onOpenDevLog={() => setShowResolverDialog(true)}
+        />
+      )}
+
+      {/* ================= Error screen ================= */}
+      {!store.urlEndPoint && (
+        <StartupErrorScreen
+          errorMsg={'No available lines found'}
+          allFailed={allFailed}
+          devModeEnabled
+          onOpenDevLog={() => setShowResolverDialog(true)}
+        />
+      )}
+
+      {/* ================= WebView ================= */}
+      <AppContent />
+
+      <HostResolverDialog
+        visible={showResolverDialog}
+        onChangeVisible={setShowResolverDialog}
+      />
     </SafeAreaProvider>
   );
 }

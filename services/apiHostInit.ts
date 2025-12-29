@@ -144,7 +144,7 @@ function mergeFastestFirst(prev: string[], next: string[]) {
 /* =====================================================
  * MAIN SERVICE
  * ===================================================== */
-export async function initApiHostsInternal(): Promise<string | null> {
+export async function initApiHostsInternal(): Promise<string | any> {
   await waitForStoreHydrated();
   if (loading) {
     console.log('⏳ initApiHosts ignored (already running)');
