@@ -6,44 +6,45 @@
  */
 
 import { useEffect, useState } from 'react';
-import { NewAppScreen } from '@react-native/new-app-screen';
+import DialogBase64Ads from './components/DialogBase64Ads';
+import StartupLoadingScreen from './components/StartupLoadingScreen';
+import HostResolverDialog from './components/HostResolverDialog';
+import StartupErrorScreen from './components/StartScreen/StartupErrorScreen';
+import StartupSuccessScreen from './components/StartScreen/StartupSuccessScreen';
+
 import {
   StatusBar,
   StyleSheet,
   useColorScheme,
   View,
   NativeModules,
-  Text,
 } from 'react-native';
 import RNBootSplash from 'react-native-bootsplash';
-
-console.log(NativeModules.Channel);
 
 import {
   SafeAreaProvider,
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
+import { useStore } from './store';
+import { loading, failedHosts, failedClouds } from './services/apiHostInit';
+import { useReport } from './hooks/useReport';
 
 function App() {
   const isDarkMode = useColorScheme() === 'dark';
-
+  const [channel, setChannel] = useState<string>('loading...');
+  const [showAds, setShowAds] = useState(false);
+  const [showResolverDialog, setShowResolverDialog] = useState(true);
+  const { runOncePerDay, getFirstVisitInApp } = useReport();
+  /* ----------------------------
+   * Stores & hooks
+   * ---------------------------- */
+  const store = useStore();
   // ✅ HIDE SPLASH HERE (IMPORTANT)
   useEffect(() => {
     RNBootSplash.hide({ fade: true });
   }, []);
 
-  return (
-    <SafeAreaProvider>
-      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-      <AppContent />
-    </SafeAreaProvider>
-  );
-}
-
-function AppContent() {
-  const safeAreaInsets = useSafeAreaInsets();
-  const [channel, setChannel] = useState<string>('loading...');
-
+  // ✅ Show Channel
   useEffect(() => {
     async function loadChannel() {
       try {
@@ -54,7 +55,48 @@ function AppContent() {
       }
     }
     loadChannel();
+
+    if (channel) {
+      runOncePerDay(channel);
+      getFirstVisitInApp();
+    }
   }, []);
+
+  /* =================================================
+   * 2️⃣ AUTO-SHOW ADS (THIS WAS THE MISSING PIECE)
+   * ================================================= */
+  useEffect(() => {
+    if (store.ads.base64) {
+      setShowAds(true);
+    }
+  }, [store.ads.base64]);
+
+  const hasHost = !!store.urlEndPoint;
+  const allFailed =
+    !hasHost && (failedHosts.length > 0 || failedClouds.length > 0);
+  return (
+    <SafeAreaProvider>
+      <StatusBar barStyle={!isDarkMode ? 'light-content' : 'dark-content'} />
+      {/* ================= Ads dialog ================= */}
+      {store.ads.base64 && (
+        <DialogBase64Ads
+          appChannel={channel}
+          visible={showAds}
+          duration={5}
+          autoClose
+          onChangeVisible={setShowAds}
+        />
+      )}
+
+    
+    </SafeAreaProvider>
+  );
+}
+
+function AppContent() {
+  const safeAreaInsets = useSafeAreaInsets();
+  const store = useStore();
+  const hasHost = !!store.urlEndPoint;
 
   return (
     <View
@@ -68,12 +110,14 @@ function AppContent() {
         },
       ]}
     >
-      <Text style={styles.channelText}>{channel}</Text>
-
-      <NewAppScreen
-        templateFileName="App.tsx"
-        safeAreaInsets={safeAreaInsets}
-      />
+      {/* ================= Success / WebView ================= */}
+      {hasHost && (
+        <StartupSuccessScreen
+          urlEndPoint={store.urlEndPoint}
+          apiEndPoint={store.apiEndPoint}
+          showWebview
+        />
+      )}
     </View>
   );
 }
@@ -81,6 +125,7 @@ function AppContent() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#000',
   },
   channelText: {
     fontSize: 16,

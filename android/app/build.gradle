@@ -2,6 +2,9 @@ apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 apply plugin: "com.tencent.vasdolly"
+apply plugin: "com.android.application"
+apply from: project(':react-native-config').projectDir.getPath() + "/dotenv.gradle"
+
 
 
 /**
@@ -9,7 +12,8 @@ apply plugin: "com.tencent.vasdolly"
  * By default you don't need to apply any configuration, just uncomment the lines you need.
  */
 react {
-    nodeExecutableAndArgs = ["/Users/viccent/.nvm/versions/node/v20.19.6/bin/node"]
+    // nodeExecutableAndArgs = ["/Users/viccent/.nvm/versions/node/v20.19.6/bin/node"]
+    nodeExecutableAndArgs = ["node"]
     /* Folders */
     //   The root of your project, i.e. where "package.json" lives. Default is '../..'
     // root = file("../../")
@@ -28,7 +32,7 @@ react {
 
     /* Bundling */
     //   A list containing the node command and its flags. Default is just 'node'.
-    // nodeExecutableAndArgs = ["node"]
+
     //
     //   The command to run when bundling. By default is 'bundle'
     // bundleCommand = "ram-bundle"
@@ -74,6 +78,11 @@ def enableProguardInReleaseBuilds = false
  * this variant is about 6MiB larger per architecture than default.
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
+
+project.ext.envConfigFiles = [
+    debug: ".env",
+    release: ".env"
+]
 
 android {
     ndkVersion rootProject.ext.ndkVersion
