@@ -27,14 +27,14 @@ import {
 } from 'react-native-safe-area-context';
 import { useStore } from './store';
 import { loading, failedHosts, failedClouds } from './services/apiHostInit';
-import { useReport } from './hooks/useReport';
+// import { useReport } from './hooks/useReport';
 
 function App() {
   const isDarkMode = useColorScheme() === 'dark';
   const [channel, setChannel] = useState<string>('loading...');
   const [showAds, setShowAds] = useState(false);
   const [showResolverDialog, setShowResolverDialog] = useState(true);
-  const { runOncePerDay, getFirstVisitInApp } = useReport();
+  // const { runOncePerDay, getFirstVisitInApp } = useReport();
   /* ----------------------------
    * Stores & hooks
    * ---------------------------- */
@@ -55,13 +55,11 @@ function App() {
       }
     }
     loadChannel();
-
-    if (channel) {
-      runOncePerDay(channel);
-      getFirstVisitInApp();
-    }
   }, []);
-
+  // if (channel) {
+  //   runOncePerDay(channel);
+  //   getFirstVisitInApp();
+  // }
   /* =================================================
    * 2️⃣ AUTO-SHOW ADS (THIS WAS THE MISSING PIECE)
    * ================================================= */
