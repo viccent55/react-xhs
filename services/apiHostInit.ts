@@ -72,6 +72,8 @@ async function safeJson(res: Response) {
  * Network
  * ===================================================== */
 async function postJson(apiUrl: string) {
+  const logger = useLoggerStore.getState();
+
   try {
     // logger.log(`→ POST ${apiUrl.split('apiv1')[0]}`);
 
@@ -80,14 +82,14 @@ async function postJson(apiUrl: string) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(wrapPayload({})),
     });
-
     const parsed = await safeJson(res);
     if (!parsed.ok) return { ok: false as const };
 
     const raw = parsed.data?.data ? decrypt(parsed.data.data) : parsed.data;
     return { ok: true as const, data: raw.data };
-  } catch {
-    loading = false;
+  } catch (e) {
+    console.log('Error: =>', e);
+    logger.log(`log error postJson => ${e}`);
     return { ok: false as const };
   } finally {
     loading = false;
@@ -104,7 +106,8 @@ async function fetchJson(url: string, logger: any) {
     console.log('res', res);
     const parsed = await safeJson(res);
     return parsed.ok ? parsed.data : null;
-  } catch {
+  } catch (e) {
+    logger.log(`log error postJson => ${e}`);
     return null;
   } finally {
     loading = false;
@@ -133,223 +136,204 @@ async function reportFailedDomain(host: string) {
   }
 }
 
-function uniq<T>(arr: T[]) {
-  return Array.from(new Set(arr));
+//Helpers
+async function fastest<T>(tasks: Promise<T>[]): Promise<T> {
+  return Promise.any(tasks);
 }
 
-function mergeFastestFirst(prev: string[], next: string[]) {
-  return uniq([...next, ...prev]);
+async function resolveApiFast(): Promise<string> {
+  const logger = useLoggerStore.getState();
+  const store = useStore.getState();
+
+  logger.log(`🔍 API host candidates: ${store.apiHosts.length}`);
+
+  const result: any = await fastest(
+    store.apiHosts.filter(isUrl).map(host =>
+      withTiming(async () => {
+        const url = `${clean(host)}/apiv1/ping/ping`;
+        logger.log(`→ GET ${url}`);
+
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('api_invalid');
+
+        logger.log(`✅ API OK: ${host}`);
+        return clean(host);
+      }),
+    ),
+  );
+  store.setApiEndPoint(result.value);
+  logger.log(`⚡ Selected API host: ${result.value}`);
+
+  return result.value ?? '';
 }
+
+async function fetchAndDecryptCloud(cloud: {
+  name: string;
+  value: string;
+}): Promise<string[]> {
+  const logger = useLoggerStore.getState();
+
+  logger.log(`☁ Fetch cloud: ${cloud.name} → ${cloud.value}`);
+
+  let list: unknown;
+
+  try {
+    list = await fetchJson(cloud.value, logger);
+  } catch (e) {
+    logger.log(`❌ Cloud fetch error: ${cloud.value}`);
+    console.log(e);
+    await reportFailedDomain(cloud.value);
+    return [];
+  }
+
+  if (!Array.isArray(list)) {
+    logger.log(`❌ Cloud response invalid: ${cloud.value}`);
+    await reportFailedDomain(cloud.value);
+    return [];
+  }
+
+  logger.log(`🔐 Cloud encrypted hosts: ${list.length}`);
+
+  const hosts = list
+    .map(enc => {
+      try {
+        return clean(decryptData(enc));
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean) as string[];
+
+  if (!hosts.length) {
+    logger.log(`❌ Cloud decrypt produced no valid hosts`);
+    await reportFailedDomain(cloud.value);
+    return [];
+  }
+
+  logger.log(`✅ Cloud decrypt success (${hosts.length} hosts)`);
+
+  return hosts;
+}
+const updateApiListInBackground = async (api: string) => {
+  const logger = useLoggerStore.getState();
+  const store = useStore.getState();
+
+  try {
+    const apiUrl = `${clean(api)}/apiv1/latest-redbook-conf`;
+    const res = await postJson(apiUrl);
+
+    if (!res?.data) return;
+
+    /* ===============================
+     * 🟡 ADS IMAGE (background)
+     * =============================== */
+    const advert = res.data.advert;
+    if (advert?.image && advert.image !== store.ads.image) {
+      try {
+        logger.log('🟡 Advert image decrypting');
+        const base64 = await decryptImagePlain(advert.image);
+        store.setAds({ ...advert, base64 });
+        logger.log('✅ Advert image decrypt finished');
+      } catch {
+        logger.log('⚠ Advert image decrypt failed');
+      }
+    }
+
+    /* ===============================
+     * 🌐 FRONTEND URL LIST (background)
+     * =============================== */
+    const rawUrls: string[] = Array.isArray(res.data.urls)
+      ? res.data.urls.filter(isUrl).map(clean)
+      : [];
+
+    if (rawUrls.length) {
+      // ✔ Store ALL URLs (no ping here)
+      useStore.setState({ urls: rawUrls });
+
+      // ✔ If no current urlEndPoint, set first one
+      if (!store.urlEndPoint) {
+        store.setUrlEndPoint(rawUrls[0]);
+        logger.log(`🌐 Default frontend set: ${rawUrls[0]}`);
+      }
+
+      logger.log(`💾 Stored frontend URLs (${rawUrls.length})`);
+    }
+
+    /* ===============================
+     * 🔐 API HOST LIST (background)
+     * =============================== */
+    const encryptedApis: string[] = Array.isArray(res.data.apis)
+      ? res.data.apis
+      : [];
+
+    const decryptedApis = encryptedApis
+      .map(enc => {
+        try {
+          return clean(decryptData(enc));
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean) as string[];
+
+    if (decryptedApis.length) {
+      useStore.setState({ apiHosts: decryptedApis });
+      logger.log(`💾 Stored API hosts (${decryptedApis.length})`);
+    }
+
+    /* ===============================
+     * 💬 CS / Live chat
+     * =============================== */
+    if (res.data.cs) {
+      store.setCs(res.data.cs);
+    }
+  } catch (e) {
+    logger.log('⚠ Background API update failed');
+    console.log('error => ', e);
+  }
+};
 
 /* =====================================================
  * MAIN SERVICE
  * ===================================================== */
-export async function initApiHostsInternal(): Promise<string | any> {
+export async function initApiHostsInternal(): Promise<string | null> {
   await waitForStoreHydrated();
-  if (loading) {
-    console.log('⏳ initApiHosts ignored (already running)');
-    return null;
-  }
-
+  if (loading) return null;
   loading = true;
 
   const logger = useLoggerStore.getState();
   const store = useStore.getState();
-  await waitForStoreHydrated();
+
   logger.clear();
   logger.log('🚀 Host resolution started');
 
   try {
-    /* ===============================
-     * 1️⃣ API HOST CHECK (FASTEST WINS)
-     * =============================== */
-    logger.log(`🔍 API host candidates: ${store.apiHosts.length}`);
+    /* === API (blocking) === */
+    const api = await resolveApiFast();
+    /* === BACKGROUND (non-blocking) === */
+    await updateApiListInBackground(api);
 
-    const apiResults = await Promise.all(
-      store.apiHosts.filter(isUrl).map(host =>
-        withTiming(async () => {
-          const apiUrl = `${clean(host)}/apiv1/latest-redbook-conf`;
-          logger.log(`→ POST ${host}`);
+    /* === FRONTEND (blocking) === */
+    // const urls = store.urls;
+    // await resolveFrontFast(urls);
 
-          const res = await postJson(apiUrl);
+    store.setApiHostReady(true);
 
-          // console.log('data => ', data);
-          if (!res?.data) {
-            throw new Error('api_invalid');
-          }
-
-          logger.log(`✅ API OK: ${host}`);
-          return { host: clean(host), raw: res.data };
-        }),
-      ),
-    );
-    const apiOk = apiResults.filter(r => r.ok).sort((a, b) => a.time - b.time);
-
-    if (!apiOk.length) {
-      logger.log('❌ All API hosts failed → switch to cloud');
-    } else {
-      const fastest = apiOk[0]!.value;
-      store.setApiEndPoint(fastest.host);
-
-      logger.log(`⚡ Fastest API host: ${fastest.host} (${apiOk[0].time}ms)`);
-      /* ===============================
-       * 🟡 ADS IMAGE DECRYPT LOGGING
-       * =============================== */
-      const advert = fastest.raw?.advert;
-      if (!store.hydrated) {
-        logger.log('⏳ Store not hydrated yet → skip advert decrypt');
-      } else if (advert?.image) {
-        if (advert.image !== store.ads.image) {
-          logger.log(`🟡 New advert image detected`);
-          logger.log(`🔐 Start decrypt advert image`);
-
-          try {
-            const base64 = await decryptImagePlain(advert.image);
-            store.setAds({ ...advert, base64 });
-            logger.log(`✅ Advert image decrypt finished`);
-          } catch (e) {
-            logger.log(`⚠ Advert image decrypt failed ${e}`);
-          }
-        } else {
-          logger.log(`ℹ️ Advert image unchanged → skip decrypt`);
-        }
-      }
-
-      /* ===============================
-       * 🌐 FRONTEND URL CHECK (FASTEST)
-       * =============================== */
-      const rawUrls: string[] = Array.isArray(fastest.raw?.urls)
-        ? fastest.raw.urls.filter(isUrl).map(clean)
-        : [];
-
-      logger.log(`🌐 Frontend candidates: ${rawUrls.length}`);
-
-      const frontResults = await Promise.all(
-        rawUrls.map(front =>
-          withTiming(async () => {
-            try {
-              const pingUrl = `${front}/ping.txt`;
-              logger.log(`→ GET ${pingUrl}`);
-
-              const res = await fetch(pingUrl);
-              if (!res.ok) throw new Error('ping_failed');
-
-              logger.log(`✅ Front OK: ${front}`);
-              return front;
-            } catch {
-              logger.log(`❌ Front FAILED: ${front}`);
-              await reportFailedDomain(front);
-              throw new Error('front_failed');
-            }
-          }),
-        ),
-      );
-
-      const okFronts = frontResults
-        .filter(r => r.ok)
-        .sort((a, b) => a.time - b.time)
-        .map(r => r.value);
-
-      if (okFronts.length) {
-        const fastestFront = okFronts[0];
-
-        store.setUrlEndPoint(fastestFront);
-
-        // 🔑 persist ALL usable fronts, fastest first, no duplicates
-        const merged = mergeFastestFirst(store.urls, okFronts);
-        useStore.setState({ urls: merged });
-
-        logger.log(`⚡ Fastest frontend: ${fastestFront}`);
-        logger.log(`💾 Stored frontend URLs (${merged.length})`);
-      } else {
-        logger.log('❌ No working frontend URL');
-      }
-
-      store.setApiHostReady(true);
-
-      /* ===============================
-       * 🔐 API HOST LIST (decrypt + store)
-       * =============================== */
-
-      const encryptedApis: string[] = Array.isArray(fastest.raw?.apis)
-        ? fastest.raw.apis
-        : [];
-
-      logger.log(`🔐 Encrypted API list: ${encryptedApis.length}`);
-      const decryptedApis = encryptedApis
-        .map(enc => {
-          try {
-            const dec = decryptData(enc);
-            logger.log(`✅ API decrypt OK: ${dec}`);
-            return dec;
-          } catch {
-            logger.log(`❌ API decrypt failed`);
-            return null;
-          }
-        })
-        .filter(Boolean) as string[];
-
-      if (decryptedApis.length) {
-        const mergedApis = mergeFastestFirst(store.apiHosts, decryptedApis);
-
-        useStore.setState({ apiHosts: mergedApis });
-
-        logger.log(`💾 Stored API hosts (${mergedApis.length})`);
-      } else {
-        logger.log(`⚠ No valid decrypted API hosts`);
-      }
-      // console.log('api response ', fastest.raw);
-      // update live-chat
-      store.setCs(fastest.raw?.cs ?? '');
-      // debugStorage();
-      return fastest.host;
-    }
-
-    /* ===============================
-     * 2️⃣ CLOUD FALLBACK
-     * =============================== */
+    return api;
+  } catch {
     logger.log('☁ Switching to CLOUD fallback');
-
     for (const cloud of store.clouds) {
-      logger.log(`☁ Fetch cloud: ${cloud.name} → ${cloud.value}`);
-
-      const list = await fetchJson(cloud.value, logger);
-
-      if (!Array.isArray(list)) {
-        logger.log(`❌ Cloud fetch failed: ${cloud.value}`);
-        await reportFailedDomain(cloud.value);
-        continue;
-      }
-
-      logger.log(`🔐 Start decrypt cloud host list (${list.length})`);
-
-      const hosts = list
-        .map(x => {
-          try {
-            return clean(decryptData(x));
-          } catch {
-            return null;
-          }
-        })
-        .filter(Boolean) as string[];
-
-      logger.log(`✅ Cloud decrypt finished (${hosts.length} hosts)`);
-
-      if (!hosts.length) {
-        await reportFailedDomain(cloud.value);
-        continue;
-      }
+      const hosts = await fetchAndDecryptCloud(cloud);
+      if (!hosts.length) continue;
 
       useStore.setState({ apiHosts: hosts });
-
+      logger.log('🔁 Retrying API resolution with cloud hosts');
       const ok = await initApiHostsInternal();
       if (ok) return ok;
     }
 
     logger.log('🧨 All cloud sources exhausted');
     return null;
-  } catch (e) {
-    console.log('catch Error: ', e);
   } finally {
     loading = false;
     logger.log('🏁 Host resolution finished');

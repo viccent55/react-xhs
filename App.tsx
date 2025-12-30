@@ -27,14 +27,16 @@ import {
 } from 'react-native-safe-area-context';
 import { useStore } from './store';
 import { loading, failedHosts, failedClouds } from './services/apiHostInit';
-// import { useReport } from './hooks/useReport';
+import { useReport } from './hooks/useReport';
+
+const DEV_MODE = false;
 
 function App() {
   const isDarkMode = useColorScheme() === 'dark';
   const [channel, setChannel] = useState<string>('loading...');
   const [showAds, setShowAds] = useState(false);
-  const [showResolverDialog, setShowResolverDialog] = useState(true);
-  // const { runOncePerDay, getFirstVisitInApp } = useReport();
+  const [showResolverDialog, setShowResolverDialog] = useState(DEV_MODE);
+  const { runOncePerDay, getFirstVisitInApp } = useReport();
   /* ----------------------------
    * Stores & hooks
    * ---------------------------- */
@@ -56,10 +58,9 @@ function App() {
     }
     loadChannel();
   }, []);
-  // if (channel) {
-  //   runOncePerDay(channel);
-  //   getFirstVisitInApp();
-  // }
+
+  runOncePerDay(channel);
+  getFirstVisitInApp(channel);
   /* =================================================
    * 2️⃣ AUTO-SHOW ADS (THIS WAS THE MISSING PIECE)
    * ================================================= */
@@ -90,7 +91,7 @@ function App() {
       {!store.ads.base64 && loading && (
         <StartupLoadingScreen
           loading={loading}
-          devModeEnabled
+          devModeEnabled={DEV_MODE}
           onOpenDevLog={() => setShowResolverDialog(true)}
         />
       )}
@@ -100,7 +101,7 @@ function App() {
         <StartupErrorScreen
           errorMsg={'No available lines found'}
           allFailed={allFailed}
-          devModeEnabled
+          devModeEnabled={DEV_MODE}
           onOpenDevLog={() => setShowResolverDialog(true)}
         />
       )}
@@ -139,6 +140,7 @@ function AppContent() {
           urlEndPoint={store.urlEndPoint}
           apiEndPoint={store.apiEndPoint}
           showWebview
+          devModeEnabled={DEV_MODE}
         />
       )}
     </View>

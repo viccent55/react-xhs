@@ -101,7 +101,6 @@ export const useStore = create<StoreState>()(
       setApiEndPoint: v => set({ apiEndPoint: v }),
       setUrlEndPoint: v => set({ urlEndPoint: v }),
       setApiHostReady: v => set({ apiHostReady: v }),
-
       setCs: v => set({ cs: v }),
 
       setAds: ads =>

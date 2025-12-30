@@ -1,33 +1,50 @@
 import React, { useRef, useState } from 'react';
-import { View, Text, StyleSheet, Pressable } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Pressable,
+  ActivityIndicator,
+  Animated,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 
-/* -----------------------------
- * Props (Vue → RN)
- * --------------------------- */
+const MAX_SOFT_RETRY = 1; // tolerate slow network once
+const MAX_HARD_RETRY = 2; // real retry before showing error
+
 type Props = {
   urlEndPoint: string;
   apiEndPoint: string;
   showWebview?: boolean;
+  devModeEnabled?: boolean;
 };
 
 export default function StartupSuccessScreen({
   urlEndPoint,
   apiEndPoint,
   showWebview: defaultShow = false,
+  devModeEnabled = false,
 }: Props) {
-  const [showWebview, setShowWebview] = useState(defaultShow);
   const webviewRef = useRef<WebView>(null);
 
+  const [showWebview, setShowWebview] = useState(defaultShow);
+  const [isLoading, setIsLoading] = useState(true);
+  const [webError, setWebError] = useState<string | null>(null);
+
+  const [retryCount, setRetryCount] = useState(0);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+
+  /* fade animation */
+  const fadeAnim = useRef(new Animated.Value(1)).current;
+
+  /* ===============================
+   * Helpers
+   * =============================== */
   function enterHome() {
     setShowWebview(true);
   }
 
-  /* -----------------------------
-   * Inject data into WebView
-   * (iframe.contentWindow.postMessage → injectJavaScript)
-   * --------------------------- */
   function injectWindowKey() {
     const payload = {
       type: 'INIT_ENV',
@@ -35,29 +52,54 @@ export default function StartupSuccessScreen({
       platform: 'react-native',
     };
 
-    const js = `
-      (function () {
-        window.postMessage(${JSON.stringify(payload)}, "*");
-        console.log("✅ INIT_ENV received:", ${JSON.stringify(payload)});
-      })();
+    webviewRef.current?.injectJavaScript(`
+      window.postMessage(${JSON.stringify(payload)}, "*");
       true;
-    `;
-
-    webviewRef.current?.injectJavaScript(js);
+    `);
   }
-  const [webError, setWebError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
 
-  /* -----------------------------
+  function hideLoader() {
+    Animated.timing(fadeAnim, {
+      toValue: 0,
+      duration: 250,
+      useNativeDriver: true,
+    }).start(() => setIsLoading(false));
+  }
+
+  /* ===============================
+   * Web failure handler (SMART)
+   * =============================== */
+  function handleWebFailure(reason: string) {
+    console.log('🌐 WebView failure:', reason);
+
+    // 🟢 First load never succeeded → tolerate once (slow network)
+    if (!hasLoadedOnce && retryCount < MAX_SOFT_RETRY) {
+      setRetryCount(c => c + 1);
+      webviewRef.current?.reload();
+      return;
+    }
+
+    // 🟡 Retry current URL a bit more
+    if (retryCount < MAX_HARD_RETRY) {
+      setRetryCount(c => c + 1);
+      webviewRef.current?.reload();
+      return;
+    }
+
+    // 🔴 REAL failure → show error UI
+    setWebError('页面加载失败，请检查网络或稍后重试');
+    setIsLoading(false);
+  }
+
+  /* ===============================
    * Startup screen
-   * --------------------------- */
+   * =============================== */
   if (!showWebview) {
     return (
       <SafeAreaView style={styles.startupContainer}>
         <View style={styles.centerBox}>
           <Text style={styles.successIcon}>✅</Text>
           <Text style={styles.successTitle}>线路检测完成</Text>
-
           <Text style={styles.successSubtitle}>
             已为您找到可用线路：
             {'\n'}
@@ -72,99 +114,128 @@ export default function StartupSuccessScreen({
     );
   }
 
-  /* -----------------------------
-   * Real WebView
-   * --------------------------- */
+  /* ===============================
+   * WebView + Loader + Error
+   * =============================== */
   return (
-    <WebView
-      ref={webviewRef}
-      source={{ uri: urlEndPoint }}
-      style={styles.webview}
-      onLoadStart={() => {
-        setIsLoading(true);
-        setWebError(null);
-      }}
-      onLoadEnd={() => {
-        setIsLoading(false);
-        injectWindowKey();
-      }}
-      onError={e => {
-        console.error('WebView error:', e.nativeEvent);
-        setIsLoading(false);
-        setWebError('页面加载失败，线路可能不可用');
-      }}
-      onHttpError={e => {
-        console.error('HTTP error:', e.nativeEvent);
-        setIsLoading(false);
-        setWebError(`服务器错误 (${e.nativeEvent.statusCode})`);
-      }}
-      // javaScriptEnabled
-      // domStorageEnabled
-      allowsFullscreenVideo
-      mediaPlaybackRequiresUserAction={false}
-      originWhitelist={['*']}
-    />
+    <View style={{ flex: 1, backgroundColor: '#000' }}>
+      <WebView
+        ref={webviewRef}
+        source={{ uri: urlEndPoint }}
+        style={styles.webview}
+        onLoadStart={() => {
+          setWebError(null);
+          setIsLoading(true);
+          fadeAnim.setValue(1);
+        }}
+        onLoadEnd={() => {
+          setHasLoadedOnce(true);
+          injectWindowKey();
+          hideLoader();
+        }}
+        onError={e => {
+          console.error('WebView error:', e.nativeEvent);
+          handleWebFailure('onError');
+        }}
+        onHttpError={e => {
+          handleWebFailure(`HTTP ${e.nativeEvent.statusCode}`);
+        }}
+        allowsFullscreenVideo
+        mediaPlaybackRequiresUserAction={false}
+        originWhitelist={['*']}
+      />
+
+      {/* ⏳ Loading Overlay */}
+      {isLoading && (
+        <Animated.View style={[styles.loadingMask, { opacity: fadeAnim }]}>
+          <ActivityIndicator size="large" color="#22c55e" />
+          <Text style={styles.loadingText}>正在加载，请稍候…</Text>
+        </Animated.View>
+      )}
+
+      {/* ❌ Error Overlay (REAL failure only) */}
+      {webError && (
+        <View style={styles.errorMask}>
+          <Text style={styles.errorText}>{webError}</Text>
+
+          <Pressable
+            style={styles.retryBtn}
+            onPress={() => {
+              setRetryCount(0);
+              setWebError(null);
+              setIsLoading(true);
+              fadeAnim.setValue(1);
+              webviewRef.current?.reload();
+            }}
+          >
+            <Text style={styles.retryText}>重新加载</Text>
+          </Pressable>
+        </View>
+      )}
+    </View>
   );
 }
+
+/* ===============================
+ * Styles
+ * =============================== */
 const styles = StyleSheet.create({
   startupContainer: {
-    ...StyleSheet.absoluteFillObject,
+    flex: 1,
     backgroundColor: '#000',
-    zIndex: 10,
   },
-
   centerBox: {
     flex: 1,
-    paddingHorizontal: 16,
-    paddingVertical: 24,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 12,
-    textAlign: 'center',
   },
-
-  successIcon: {
-    fontSize: 40,
-  },
-
-  successTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#fff',
-  },
-
-  successSubtitle: {
-    fontSize: 13,
-    opacity: 0.9,
-    color: '#fff',
-    textAlign: 'center',
-  },
-
-  primaryText: {
-    color: '#2563eb',
-  },
+  successIcon: { fontSize: 40 },
+  successTitle: { color: '#fff', fontSize: 18, fontWeight: '600' },
+  successSubtitle: { color: '#fff', textAlign: 'center' },
+  primaryText: { color: '#2563eb' },
 
   enterBtn: {
     marginTop: 16,
+    backgroundColor: '#2563eb',
     paddingHorizontal: 24,
     paddingVertical: 12,
     borderRadius: 12,
-    backgroundColor: '#2563eb',
   },
+  enterBtnText: { color: '#fff', fontWeight: '600' },
 
-  enterBtnText: {
+  webview: { flex: 1 },
+
+  loadingMask: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+  },
+  loadingText: {
     color: '#fff',
-    fontSize: 15,
-    fontWeight: '600',
+    fontSize: 13,
+    opacity: 0.85,
   },
 
-  webviewContainer: {
-    flex: 1,
-    backgroundColor: '#000',
+  errorMask: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 16,
   },
-
-  webview: {
-    flex: 1,
-    backgroundColor: '#000',
+  errorText: {
+    color: '#f87171',
+    fontSize: 14,
+    textAlign: 'center',
   },
+  retryBtn: {
+    backgroundColor: '#2563eb',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  retryText: { color: '#fff', fontWeight: '600' },
 });
